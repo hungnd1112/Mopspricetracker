@@ -94,6 +94,293 @@ def render_tab_oil(df, df_enrich):
     st.plotly_chart(fig, use_container_width=True)
     st.dataframe(df_day.sort_values("thoi_gian", ascending=False).head(10), use_container_width=True)
 
+
+def render_tab_mops(df_mops, df_enrich):
+    import numpy as np
+
+    st.markdown("""
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    """, unsafe_allow_html=True)
+    st.markdown("## MÔ HÌNH DỰ BÁO GIÁ PLATTS XĂNG 95:")
+
+    df = df_mops.copy()
+    df["RunTime"] = pd.to_datetime(df["RunTime"], dayfirst=True, errors='coerce')
+    df = df[df["RunTime"].notna()]
+    df = df.sort_values("RunTime", ascending=True)
+    df["date"] = df["RunTime"].dt.date
+
+    # Sidebar chọn ngày
+    all_dates = df["date"].unique()
+    if len(all_dates) == 0:
+        st.warning("Không có dữ liệu để hiển thị!")
+        return
+
+    date_selected = st.sidebar.date_input(
+        "Chọn ngày cần xem",
+        value=all_dates[-1],
+        min_value=min(all_dates),
+        max_value=max(all_dates)
+    )
+    if isinstance(date_selected, list):
+        date_selected = date_selected[0]
+    date_selected = pd.to_datetime(date_selected).date()
+
+    df_ngay = df[df["date"] == date_selected]
+    if df_ngay.empty:
+        st.warning("Không có dữ liệu dự báo cho ngày này!")
+        return
+
+    # Chọn thời điểm (RunTime)
+    runtime_options = df_ngay["RunTime"].dt.strftime("%H:%M:%S").tolist()
+    runtime_map = dict(zip(runtime_options, df_ngay.index))
+    runtime_selected = st.selectbox("Chọn thời điểm (RunTime)", runtime_options, index=len(runtime_options)-1)
+    row = df_ngay.loc[runtime_map[runtime_selected]]
+
+    # Lấy hôm qua gần nhất có dữ liệu enrich
+    df_enrich_ = df_enrich.copy()
+    for col in df_enrich_.columns:
+        if "date" in col.lower():
+            df_enrich_["Date"] = pd.to_datetime(df_enrich_[col], dayfirst=True, errors='coerce')
+    df_enrich_ = df_enrich_[df_enrich_["Date"].notna()].sort_values("Date")
+
+    # Tìm row hôm qua gần nhất có dữ liệu
+    row_enrich = df_enrich_[df_enrich_["Date"].dt.date < date_selected].iloc[-1] if not df_enrich_[df_enrich_["Date"].dt.date < date_selected].empty else None
+
+    # === Hàm phụ ===
+    def to_float(val):
+        try:
+            if pd.isna(val): return None
+            if isinstance(val, (float, int)): return float(val)
+            return float(str(val).replace(",", ".").replace(" ", ""))
+        except: return None
+
+    def format_vn(val):
+        try:
+            v = float(val)
+            return f"{v:,.2f}".replace(",", ".")
+        except: return str(val) if val is not None else "..."
+
+    def sign_arrow(val):
+        if val is None: return ""
+        arrow = "🔼" if val > 0 else "🔽" if val < 0 else "⏺"
+        color = "#198544" if val > 0 else "#d6223c" if val < 0 else "#787878"
+        sign = "+" if val > 0 else ""
+        return f"<span style='color:{color};font-weight:bold'>{arrow} {sign}{val:.2f}</span>"
+
+    def safe_val(obj, key, fmt=".2f"):
+        if obj is None: return "..."
+        columns = [str(c).lower().replace(" ", "").replace("_", "") for c in obj.index]
+        key_search = key.lower().replace(" ", "").replace("_", "")
+        key_dict = dict(zip(columns, obj.index))
+        real_key = key_dict.get(key_search)
+        if real_key is not None and pd.notnull(obj[real_key]):
+            val = obj[real_key]
+            if isinstance(val, str):
+                try: val = to_float(val)
+                except: return str(val)
+            if not isinstance(val, (int, float, np.number)):
+                return str(val)
+            return format_vn(val)
+        return "..."
+
+    def safe_time(obj, key):
+        v = obj.get(key) if obj is not None else None
+        if isinstance(v, pd.Timestamp) and pd.notnull(v):
+            return v.strftime('%d/%m/%Y %H:%M:%S')
+        return "N/A"
+
+    run_time_str = safe_time(row, 'RunTime')
+    brent_today = safe_val(row, "BrentClose")
+    wti_today = safe_val(row, "WTIClose")
+    brent_yt = safe_val(row_enrich, "BrentClose")
+    wti_yt = safe_val(row_enrich, "WTIClose")
+    mops_yt = safe_val(row_enrich, "MOP95")
+
+    # Tính chênh lệch Brent, WTI hôm nay vs hôm qua
+    try:
+        brent_today_f = to_float(row["BrentClose"])
+        brent_yt_f = to_float(row_enrich["BrentClose"]) if row_enrich is not None else None
+        wti_today_f = to_float(row["WTIClose"])
+        wti_yt_f = to_float(row_enrich["WTIClose"]) if row_enrich is not None else None
+    except Exception:
+        brent_today_f = brent_yt_f = wti_today_f = wti_yt_f = None
+
+    delta_brent_val = brent_today_f - brent_yt_f if brent_today_f is not None and brent_yt_f is not None else None
+    delta_wti_val = wti_today_f - wti_yt_f if wti_today_f is not None and wti_yt_f is not None else None
+
+    # Giá MOPS thực tế hôm qua
+    try:
+        mops_yt_f = to_float(row_enrich["MOP95"]) if row_enrich is not None else None
+    except Exception:
+        mops_yt_f = None
+
+    # Top 3 model sát nhất với Brent, tính khoảng dự báo
+    models = ["LinearRegression", "XGBoost", "RandomForest", "Polynomial"]
+    pred_range_min = pred_range_max = None
+    delta_models = []
+
+    if row_enrich is not None and pd.notnull(row_enrich["BrentClose"]) and pd.notnull(row["BrentClose"]):
+        try:
+            brent_today_f_ = to_float(row["BrentClose"])
+            brent_yt_f_ = to_float(row_enrich["BrentClose"])
+            delta_brent = brent_today_f_ - brent_yt_f_
+        except Exception:
+            delta_brent = None
+
+        for m in models:
+            pred = row.get(f"{m}_pred", None)
+            mae = row.get(f"{m}_mae", None)
+            delta = row.get(f"{m}_delta", None)
+            if pred is None or mae is None or delta is None or delta_brent is None:
+                continue
+            try:
+                pred = to_float(pred)
+                mae = abs(to_float(mae))
+                delta = to_float(delta)
+            except Exception:
+                continue
+            pred_adj = pred + mae if delta < 0 else pred - mae
+            dist = abs(abs(delta) - abs(delta_brent))
+            delta_models.append((m, delta, mae, dist, pred, pred_adj))
+        delta_models = sorted(delta_models, key=lambda x: x[3])  # Sát chênh lệch Brent nhất
+
+        if len(delta_models) >= 3:
+            preds_adj = [delta_models[i][5] for i in range(3)]
+            pred_range_min = min(preds_adj)
+            pred_range_max = max(preds_adj)
+        elif len(delta_models) >= 2:
+            preds_adj = [delta_models[i][5] for i in range(2)]
+            pred_range_min = min(preds_adj)
+            pred_range_max = max(preds_adj)
+
+    # Chênh lệch khoảng dự báo và giá thực tế hôm qua
+    delta_pred_min = delta_pred_max = None
+    if mops_yt_f is not None and pred_range_min is not None and pred_range_max is not None:
+        delta_pred_min = pred_range_min - mops_yt_f
+        delta_pred_max = pred_range_max - mops_yt_f
+
+    # UI block đẹp, màu nền, format số Việt Nam, tối ưu mobile
+    st.markdown(
+        f"""
+        <div style='background: #EFF4FA; padding: 10px 12px; border-radius:12px; margin-bottom:10px;font-size:1.02em'>
+            <b>⏰ Thời điểm dự báo:</b> <span style='color:#1558a7;font-size:1.1em'>{run_time_str}</span><br>
+            <b>Brent hôm nay:</b> <span style='color:#347d39;font-size:1.17em'>{brent_today}</span> |
+            <b>Hôm qua:</b> <span style='color:#7c7c7c'>{brent_yt}</span> {sign_arrow(delta_brent_val)}<br>
+            <b>WTI hôm nay:</b> <span style='color:#a74814;font-size:1.17em'>{wti_today}</span> |
+            <b>Hôm qua:</b> <span style='color:#7c7c7c'>{wti_yt}</span> {sign_arrow(delta_wti_val)}<br>
+            <b>PLATTS XĂNG 95 hôm qua:</b> <span style='color:#336699'>{mops_yt}</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # HIỂN THỊ KHOẢNG DỰ BÁO + CHÊNH LỆCH
+    if pred_range_min is not None and pred_range_max is not None and mops_yt_f is not None:
+        st.markdown(
+            f"""<div style='background:#f7f0e3;padding:11px 12px;border-radius:12px;margin-bottom:10px;'>
+            <b>🚦 Khoảng dự báo giá Platts xăng 95 (MOPS95):</b>
+            <span style='color:#2A62B8;font-weight:bold;font-size:1.23rem'>
+            {format_vn(pred_range_min)} – {format_vn(pred_range_max)}
+            </span> đ/lít<br>
+            <b>Chênh lệch với giá MOPS hôm qua:</b> 
+            {sign_arrow(delta_pred_min)} đến {sign_arrow(delta_pred_max)}
+            </div>""",
+            unsafe_allow_html=True
+        )
+    elif pred_range_min is not None and pred_range_max is not None:
+        st.markdown(
+            f"""<div style='background:#f7f0e3;padding:11px 12px;border-radius:12px;margin-bottom:10px;'>
+            <b>🚦 Khoảng dự báo giá Platts xăng 95 (MOPS95):</b>
+            <span style='color:#2A62B8;font-weight:bold;font-size:1.23rem'>{format_vn(pred_range_min)} – {format_vn(pred_range_max)}</span> đ/lít
+            </div>""",
+            unsafe_allow_html=True
+        )
+
+    # Block 3 mô hình sát nhất với Brent
+    if len(delta_models) >= 3:
+        st.markdown("""
+        <style>
+            .model-brent-box {
+                background: #f2f7ff;
+                border-radius: 10px;
+                padding: 10px 13px 8px 13px;
+                margin-bottom: 0px;
+            }
+            .model-brent-title {
+                color: #15477a;
+                font-size: 1.09em;
+                font-weight: bold;
+                margin-bottom: 5px;
+            }
+            .model-brent-row {
+                font-size: 14px;
+                margin-bottom: 2px;
+            }
+            .model-name {font-weight: 700; min-width: 82px; display: inline-block;}
+            .model-label {min-width: 40px; display: inline-block; color: #666;}
+            .model-value {font-weight: 600; color: #23356c;}
+            .model-delta-up {color: #198544;}
+            .model-delta-down {color: #d6223c;}
+        </style>
+        """, unsafe_allow_html=True)
+        st.markdown(
+            """<div class="model-brent-box">
+                <div class="model-brent-title">📈 3 mô hình sát nhất với biến động Brent:</div>
+            """, unsafe_allow_html=True)
+        icons = {"LinearRegression": "🟦", "XGBoost": "🟧", "RandomForest": "🟩", "Polynomial": "🟪"}
+        colors = {"RandomForest": "#2270d6", "Polynomial": "#6b34ad", "XGBoost": "#b86818", "LinearRegression": "#357824"}
+        for m, delta, mae, dist, pred, pred_adj in delta_models[:3]:
+            sign = "+" if delta > 0 else ""
+            icon = icons.get(m, "")
+            color = colors.get(m, "#444")
+            arrow = "🔻 Giảm" if delta < 0 else "🔺 Tăng"
+            delta_class = "model-delta-down" if delta < 0 else "model-delta-up"
+            st.markdown(
+                f"""
+                <div class="model-brent-row">
+                    <span class="model-name" style="color:{color}">{icon} {m}:</span>
+                    <span class="model-label">Dự báo:</span>
+                    <span class="model-value">{format_vn(pred)}</span> |
+                    <span class="model-label">Δ:</span>
+                    <span class="{delta_class}">{sign}{format_vn(delta)}</span> |
+                    <span class="model-label">|Δ-Brent|=</span>
+                    <span class="model-value">{format_vn(dist)}</span> |
+                    <span class="model-label">MAE=</span>
+                    <span class="model-value">{format_vn(mae)}</span>
+                    <br>
+                    <span class="model-label">→ Dự báo hiệu chỉnh:</span>
+                    <span class="model-value" style="color:{color};font-size:1.07em;">{format_vn(pred_adj)}</span>
+                    <span class="{delta_class}" style="font-size:0.98em;margin-left:5px">{arrow} {sign}{format_vn(delta)}</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Bảng tóm tắt tất cả mô hình
+    lines = ["┏━━━━━━━━━━━━━━━━━━━"]
+    for m in models:
+        pred = row.get(f"{m}_pred", None)
+        mae = row.get(f"{m}_mae", None)
+        delta = row.get(f"{m}_delta", None)
+        if pred is None or mae is None or delta is None:
+            continue
+        try:
+            pred = to_float(pred)
+            mae = to_float(mae)
+            delta = to_float(delta)
+        except Exception:
+            continue
+        sign = "+" if delta > 0 else ""
+        arrow = "Tăng" if delta > 0 else "Giảm"
+        lines.append(f"┃ {m}: {format_vn(pred)} (MAE={format_vn(mae)}) ({arrow} {sign}{format_vn(delta)})")
+    lines.append("┗━━━━━━━━━━━━━━━━━━━")
+    st.code('\n'.join(lines), language="text")
+
+    # (Tuỳ chọn) Hiện bảng chi tiết
+    with st.expander("Bảng dữ liệu chi tiết ngày này"):
+        st.dataframe(df_ngay, use_container_width=True)
+
 def render_tab_mae(df_rolling):
     st.header("Sai số MAE Rolling")
     df = df_rolling.copy()
