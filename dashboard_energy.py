@@ -807,7 +807,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import gspread
+import json
+
 from gspread_dataframe import get_as_dataframe
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -823,14 +824,19 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-SERVICE_ACCOUNT_JSON = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
 
-# Nếu là dạng string thì parse ra dict:
+# ==== GOOGLE SHEET CONFIG ====
+SHEET_ID = "1t9CSWV_NUxG-9WOWIz6vRITcBwVnBgqwbAdITAKfmW4"
+SHEET_OIL = "data"
+SHEET_LOG = "log_run_history_2"
+SHEET_ENRICH = "train_mop_enrich"
+SHEET_ROLLING = "log_rolling_results"
+SHEET_GCS = "data_giadinh"
+
+# ==== ĐỌC GOOGLE SERVICE ACCOUNT TỪ SECRETS ====
+SERVICE_ACCOUNT_JSON = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
 if isinstance(SERVICE_ACCOUNT_JSON, str):
     SERVICE_ACCOUNT_JSON = json.loads(SERVICE_ACCOUNT_JSON)
-
-# Google API dùng dict luôn
-from oauth2client.service_account import ServiceAccountCredentials
 
 @st.cache_data(ttl=300)
 def load_sheet(sheet_name):
@@ -847,21 +853,11 @@ def load_sheet(sheet_name):
             df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
     return df
 
-# ==== GOOGLE SHEET CONFIG ====
-SHEET_ID = "1t9CSWV_NUxG-9WOWIz6vRITcBwVnBgqwbAdITAKfmW4"
-CREDENTIALS_FILE = "credentials.json"
-SHEET_OIL = "data"
-SHEET_LOG = "log_run_history_2"
-SHEET_ENRICH = "train_mop_enrich"
-SHEET_ROLLING = "log_rolling_results"
-SHEET_GCS = "data_giadinh"
-
-@st.cache_data(ttl=300)
 # ==== LOAD DATA ====
 df_oil = load_sheet(SHEET_OIL)
 df_mops = load_sheet(SHEET_LOG)
 df_rolling = load_sheet(SHEET_ROLLING)
-df_log = load_sheet(SHEET_LOG)      # hoặc đổi sang sheet log khác nếu muốn
+df_log = load_sheet(SHEET_LOG)
 df_enrich = load_sheet(SHEET_ENRICH)
 df_gcs = load_sheet(SHEET_GCS)
 
@@ -877,7 +873,7 @@ tab_options = [
 tab_selected = st.sidebar.radio("Chọn chuyên mục", tab_options, index=0)
 
 if tab_selected == tab_options[0]:
-    render_tab_oil(df_oil,df_enrich)
+    render_tab_oil(df_oil, df_enrich)
 elif tab_selected == tab_options[1]:
     render_tab_mops(df_mops, df_enrich)
 elif tab_selected == tab_options[2]:
