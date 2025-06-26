@@ -1,0 +1,6 @@
+streamlit
+pandas
+plotly
+gspread
+gspread_dataframe
+oauth2client
