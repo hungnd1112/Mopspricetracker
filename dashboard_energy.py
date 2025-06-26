@@ -48,7 +48,15 @@ def load_sheet(sheet_name):
     return df
 
 SHEET_ID = st.secrets["SHEET_ID"]
-# ==== LOAD DATA ====
+
+# Định nghĩa tên các sheet
+SHEET_OIL = "data"
+SHEET_LOG = "log_run_history_2"
+SHEET_ENRICH = "train_mop_enrich"
+SHEET_ROLLING = "log_rolling_results"
+SHEET_GCS = "data_giadinh"
+
+# Sau đó mới load data
 df_oil = load_sheet(SHEET_OIL)
 df_mops = load_sheet(SHEET_LOG)
 df_rolling = load_sheet(SHEET_ROLLING)
