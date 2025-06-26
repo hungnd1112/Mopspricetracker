@@ -823,6 +823,29 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+SERVICE_ACCOUNT_JSON = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
+
+# Nếu là dạng string thì parse ra dict:
+if isinstance(SERVICE_ACCOUNT_JSON, str):
+    SERVICE_ACCOUNT_JSON = json.loads(SERVICE_ACCOUNT_JSON)
+
+# Google API dùng dict luôn
+from oauth2client.service_account import ServiceAccountCredentials
+
+@st.cache_data(ttl=300)
+def load_sheet(sheet_name):
+    import gspread
+    from gspread_dataframe import get_as_dataframe
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(SERVICE_ACCOUNT_JSON, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID).worksheet(sheet_name)
+    df = get_as_dataframe(sheet).dropna(how="all")
+    df.columns = [c.strip() for c in df.columns]
+    for col in df.columns:
+        if "time" in col.lower() or "date" in col.lower():
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+    return df
 
 # ==== GOOGLE SHEET CONFIG ====
 SHEET_ID = "1t9CSWV_NUxG-9WOWIz6vRITcBwVnBgqwbAdITAKfmW4"
@@ -834,18 +857,6 @@ SHEET_ROLLING = "log_rolling_results"
 SHEET_GCS = "data_giadinh"
 
 @st.cache_data(ttl=300)
-def load_sheet(sheet_name):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).worksheet(sheet_name)
-    df = get_as_dataframe(sheet).dropna(how="all")
-    df.columns = [c.strip() for c in df.columns]
-    for col in df.columns:
-        if "time" in col.lower() or "date" in col.lower():
-            df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
-    return df
-
 # ==== LOAD DATA ====
 df_oil = load_sheet(SHEET_OIL)
 df_mops = load_sheet(SHEET_LOG)
