@@ -1,3 +1,93 @@
+import streamlit as stMore actions
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+import gspread
+import json
+from gspread_dataframe import get_as_dataframe
+from oauth2client.service_account import ServiceAccountCredentials
+
+st.set_page_config(page_title="Dashboard Giá Dầu & Xăng Dầu", layout="wide")
+st.markdown("""
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+.stDataFrame {font-size:15px !important;}
+.stPlotlyChart {margin-bottom: 0.5rem !important;}
+.block-container {padding: 0.7rem 0.2rem !important;}
+@media (max-width: 800px) {
+    .stDataFrame, th, td {font-size: 16px !important;}
+}
+</style>
+""", unsafe_allow_html=True)
+
+def get_gspread_client():
+    import json
+    from oauth2client.service_account import ServiceAccountCredentials
+    import gspread
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client
+
+@st.cache_data(ttl=300)
+def load_sheet(sheet_name):
+    client = get_gspread_client()
+    sheet = client.open_by_key(SHEET_ID).worksheet(sheet_name)
+    df = get_as_dataframe(sheet).dropna(how="all")
+    df.columns = [c.strip() for c in df.columns]
+    for col in df.columns:
+        if "time" in col.lower() or "date" in col.lower():
+            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
+    return df
+
+SHEET_ID = st.secrets["SHEET_ID"]
+
+# ==== LOAD DATA ====
+df_oil = load_sheet(SHEET_OIL)
+df_mops = load_sheet(SHEET_LOG)
+df_rolling = load_sheet(SHEET_ROLLING)
+df_log = load_sheet(SHEET_LOG)      # hoặc đổi sang sheet log khác nếu muốn
+df_enrich = load_sheet(SHEET_ENRICH)
+df_gcs = load_sheet(SHEET_GCS)
+df_main = load_sheet(SHEET_MAIN)
+df_kq, df_thongke = load_kq_and_stat("kq_dubao")
+
+
+# ==== SIDEBAR RADIO MENU ====
+tab_options = [
+    "🛢️ Giá Dầu",
+    "⛽ Dự Báo MOPS",
+    "📉 MAE Rolling",
+    "📝 Log/Báo Cáo",
+    "📅 Dự báo GCS chu kỳ",
+    "📋 Giá cơ sở 14 ngày",
+    "📋 Bảng tổng hợp"
+]
+tab_selected = st.sidebar.radio("Chọn chuyên mục", tab_options, index=0)
+
+if tab_selected == tab_options[0]:
+    render_tab_oil(df_oil, df_enrich)
+elif tab_selected == tab_options[1]:
+    render_tab_mops(df_mops, df_enrich, df_kq, df_thongke, df_log)
+elif tab_selected == tab_options[2]:
+    render_tab_mae(df_rolling)
+elif tab_selected == tab_options[3]:
+    render_tab_log_kq(df_kq)
+elif tab_selected == tab_options[4]:
+    df_gcs = load_sheet(SHEET_GCS)
+    df_main = load_sheet(SHEET_MAIN)
+    df_main["Date"] = pd.to_datetime(df_main["Date"], errors="coerce")
+    render_tab_gcs_chuky(df_gcs, df_main)
+elif tab_selected == tab_options[5]:
+    render_tab_14days(df_main)
+elif tab_selected == tab_options[6]:
+    tab_bang_tong_hop(df_mops, df_enrich, df_gcs, df_brent_wti=None)
 
 def to_float(val):
     if isinstance(val, str):
@@ -1816,95 +1906,3 @@ def tab_bang_tong_hop(df_mops, df_enrich, df_gcs, df_brent_wti=None):
 
 # --- Ví dụ gọi thử ---
 # tab_bang_tong_hop(df_mops, df_enrich, df_gcs)
-
-
-# code tab chinh
-
-import streamlit as st
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import gspread
-from gspread_dataframe import get_as_dataframe
-from oauth2client.service_account import ServiceAccountCredentials
-
-st.set_page_config(page_title="Dashboard Giá Dầu & Xăng Dầu", layout="wide")
-
-# CSS responsive cho mobile
-st.markdown("""
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <style>
-    .stDataFrame {font-size: 15px !important;}
-    .stPlotlyChart {margin-bottom: 0.7rem !important;}
-    .block-container {padding-top: 1rem !important;}
-    @media (max-width: 800px) {
-        .element-container {padding: 0.6rem 0.2rem;}
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-CREDENTIALS_FILE = "credentials.json"
-
-# ==== GOOGLE SHEET CONFIG ====
-SHEET_ID = "1t9CSWV_NUxG-9WOWIz6vRITcBwVnBgqwbAdITAKfmW4"
-CREDENTIALS_FILE = "credentials.json"
-SHEET_OIL = "data"
-SHEET_LOG = "log_run_history_2"
-SHEET_ENRICH = "train_mop_enrich"
-SHEET_ROLLING = "log_rolling_results"
-SHEET_GCS = "data_giadinh"
-SHEET_MAIN = "data_main"
-
-@st.cache_data(ttl=300)
-def load_sheet(sheet_name):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).worksheet(sheet_name)
-    df = get_as_dataframe(sheet).dropna(how="all")
-    df.columns = [c.strip() for c in df.columns]
-    for col in df.columns:
-        if "time" in col.lower() or "date" in col.lower():
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
-    return df
-
-# ==== LOAD DATA ====
-df_oil = load_sheet(SHEET_OIL)
-df_mops = load_sheet(SHEET_LOG)
-df_rolling = load_sheet(SHEET_ROLLING)
-df_log = load_sheet(SHEET_LOG)      # hoặc đổi sang sheet log khác nếu muốn
-df_enrich = load_sheet(SHEET_ENRICH)
-df_gcs = load_sheet(SHEET_GCS)
-df_main = load_sheet(SHEET_MAIN)
-df_kq, df_thongke = load_kq_and_stat("kq_dubao")
-
-
-# ==== SIDEBAR RADIO MENU ====
-tab_options = [
-    "🛢️ Giá Dầu",
-    "⛽ Dự Báo MOPS",
-    "📉 MAE Rolling",
-    "📝 Log/Báo Cáo",
-    "📅 Dự báo GCS chu kỳ",
-    "📋 Giá cơ sở 14 ngày",
-    "📋 Bảng tổng hợp"
-]
-tab_selected = st.sidebar.radio("Chọn chuyên mục", tab_options, index=0)
-
-if tab_selected == tab_options[0]:
-    render_tab_oil(df_oil, df_enrich)
-elif tab_selected == tab_options[1]:
-    render_tab_mops(df_mops, df_enrich, df_kq, df_thongke, df_log)
-elif tab_selected == tab_options[2]:
-    render_tab_mae(df_rolling)
-elif tab_selected == tab_options[3]:
-    render_tab_log_kq(df_kq)
-elif tab_selected == tab_options[4]:
-    df_gcs = load_sheet(SHEET_GCS)
-    df_main = load_sheet(SHEET_MAIN)
-    df_main["Date"] = pd.to_datetime(df_main["Date"], errors="coerce")
-    render_tab_gcs_chuky(df_gcs, df_main)
-elif tab_selected == tab_options[5]:
-    render_tab_14days(df_main)
-elif tab_selected == tab_options[6]:
-    tab_bang_tong_hop(df_mops, df_enrich, df_gcs, df_brent_wti=None)
