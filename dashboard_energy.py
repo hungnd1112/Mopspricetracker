@@ -1,4 +1,4 @@
-import streamlit as stMore actions
+import streamlit as stMore
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
